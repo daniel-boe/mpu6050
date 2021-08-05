@@ -5,7 +5,7 @@ Released under the MIT License
 Copyright (c) 2015, 2016, 2017 MrTijn/Tijndagamer
 """
 
-import smbus
+import smbus2
 
 class mpu6050:
 
@@ -40,22 +40,32 @@ class mpu6050:
     PWR_MGMT_1 = 0x6B
     PWR_MGMT_2 = 0x6C
 
-    ACCEL_XOUT0 = 0x3B
-    ACCEL_YOUT0 = 0x3D
-    ACCEL_ZOUT0 = 0x3F
+    # Accelerometer registers
+    ACCEL_XOUTH = 0x3B
+    ACCEL_XOUTL = 0x3C
+    ACCEL_YOUTH = 0x3D
+    ACCEL_YOUTL = 0x3E
+    ACCEL_ZOUTH = 0x3F
+    ACCEL_ZOUTL = 0x40
 
-    TEMP_OUT0 = 0x41
+    # Temperature Regiesters
+    TEMP_OUTH = 0x41
+    TEMP_OUTL = 0x41
 
-    GYRO_XOUT0 = 0x43
-    GYRO_YOUT0 = 0x45
-    GYRO_ZOUT0 = 0x47
+    # Gyro Registers
+    GYRO_XOUTH = 0x43
+    GYRO_XOUTL = 0x44
+    GYRO_YOUTH = 0x45
+    GYRO_YOUTL = 0x46
+    GYRO_ZOUTH = 0x47
+    GYRO_ZOUTL = 0x48
 
     ACCEL_CONFIG = 0x1C
     GYRO_CONFIG = 0x1B
 
     def __init__(self, address, bus=1):
         self.address = address
-        self.bus = smbus.SMBus(bus)
+        self.bus = smbus2.SMBus(bus)
         # Wake up the MPU-6050 since it starts in sleep mode
         self.bus.write_byte_data(self.address, self.PWR_MGMT_1, 0x00)
 
@@ -85,7 +95,7 @@ class mpu6050:
 
         Returns the temperature in degrees Celcius.
         """
-        raw_temp = self.read_i2c_word(self.TEMP_OUT0)
+        raw_temp = self.read_i2c_word(self.TEMP_OUTH)
 
         # Get the actual temperature using the formule given in the
         # MPU-6050 Register Map and Descriptions revision 4.2, page 30
@@ -136,9 +146,9 @@ class mpu6050:
         If g is False, it will return the data in m/s^2
         Returns a dictionary with the measurement results.
         """
-        x = self.read_i2c_word(self.ACCEL_XOUT0)
-        y = self.read_i2c_word(self.ACCEL_YOUT0)
-        z = self.read_i2c_word(self.ACCEL_ZOUT0)
+        x = self.read_i2c_word(self.ACCEL_XOUTH)
+        y = self.read_i2c_word(self.ACCEL_YOUTH)
+        z = self.read_i2c_word(self.ACCEL_ZOUTH)
 
         accel_scale_modifier = None
         accel_range = self.read_accel_range(True)
@@ -208,9 +218,9 @@ class mpu6050:
 
         Returns the read values in a dictionary.
         """
-        x = self.read_i2c_word(self.GYRO_XOUT0)
-        y = self.read_i2c_word(self.GYRO_YOUT0)
-        z = self.read_i2c_word(self.GYRO_ZOUT0)
+        x = self.read_i2c_word(self.GYRO_XOUTH)
+        y = self.read_i2c_word(self.GYRO_YOUTH)
+        z = self.read_i2c_word(self.GYRO_ZOUTH)
 
         gyro_scale_modifier = None
         gyro_range = self.read_gyro_range(True)
