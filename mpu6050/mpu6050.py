@@ -3,38 +3,64 @@ between a Raspberry Pi and a MPU-6050 Gyroscope / Accelerometer combo.
 Made by: MrTijn/Tijndagamer
 Released under the MIT License
 Copyright (c) 2015, 2016, 2017 MrTijn/Tijndagamer
-"""
 
+Forked by Daniel Boe
+"""
 import smbus2
+import logging
+from math import acos,sqrt,pi
+
+l = logging.getLogger(__name__)
+l.setLevel(logging.root.level)
 
 class mpu6050:
 
     # Global Variables
     GRAVITIY_MS2 = 9.80665
-    address = None
-    bus = None
 
     # Scale Modifiers
     ACCEL_SCALE_MODIFIER_2G = 16384.0
     ACCEL_SCALE_MODIFIER_4G = 8192.0
     ACCEL_SCALE_MODIFIER_8G = 4096.0
     ACCEL_SCALE_MODIFIER_16G = 2048.0
-
+    
+    ACCEL_SCALE_MAP={'2g':ACCEL_SCALE_MODIFIER_2G,
+                     '4g':ACCEL_SCALE_MODIFIER_4G,
+                     '8g':ACCEL_SCALE_MODIFIER_8G,
+                     '16g':ACCEL_SCALE_MODIFIER_16G}
+        
     GYRO_SCALE_MODIFIER_250DEG = 131.0
     GYRO_SCALE_MODIFIER_500DEG = 65.5
     GYRO_SCALE_MODIFIER_1000DEG = 32.8
     GYRO_SCALE_MODIFIER_2000DEG = 16.4
 
-    # Pre-defined ranges
+    GYRO_SCALE_MAP={'250deg':GYRO_SCALE_MODIFIER_250DEG,
+                    '500deg':GYRO_SCALE_MODIFIER_500DEG,
+                    '1000deg':GYRO_SCALE_MODIFIER_1000DEG,
+                    '2000deg':GYRO_SCALE_MODIFIER_2000DEG}
+
+    # Pre-defined ranges (Page 15 in manual)
     ACCEL_RANGE_2G = 0x00
     ACCEL_RANGE_4G = 0x08
     ACCEL_RANGE_8G = 0x10
     ACCEL_RANGE_16G = 0x18
 
+    ACCEL_RANGE_MAP={'2g':ACCEL_RANGE_2G,
+                     '4g':ACCEL_RANGE_4G,
+                     '8g':ACCEL_RANGE_8G,
+                     '16g':ACCEL_RANGE_16G}
+
+
+    # Pre-defined ranges (Page 14 in manual)
     GYRO_RANGE_250DEG = 0x00
     GYRO_RANGE_500DEG = 0x08
     GYRO_RANGE_1000DEG = 0x10
     GYRO_RANGE_2000DEG = 0x18
+
+    GYRO_RANGE_MAP={'250deg':GYRO_RANGE_250DEG,
+                    '500deg':GYRO_RANGE_500DEG,
+                    '1000deg':GYRO_RANGE_1000DEG,
+                    '2000deg':GYRO_RANGE_2000DEG}
 
     # MPU-6050 Registers
     PWR_MGMT_1 = 0x6B
@@ -48,7 +74,7 @@ class mpu6050:
     ACCEL_ZOUTH = 0x3F
     ACCEL_ZOUTL = 0x40
 
-    # Temperature Regiesters
+    # Temperature Registers
     TEMP_OUTH = 0x41
     TEMP_OUTL = 0x41
 
@@ -64,12 +90,16 @@ class mpu6050:
     GYRO_CONFIG = 0x1B
 
     def __init__(self, address, bus=1):
+        
+        l.info(f'{__class__.__name__}.__init__(), address={address}')
         self.address = address
         self.bus = smbus2.SMBus(bus)
+
         # Wake up the MPU-6050 since it starts in sleep mode
         self.bus.write_byte_data(self.address, self.PWR_MGMT_1, 0x00)
 
-    # I2C communication methods
+        self.set_accel_range('4g')
+        self.set_gyro_range('500deg')
 
     def read_i2c_word(self, register):
         """Read two i2c registers and combine them.
@@ -78,8 +108,16 @@ class mpu6050:
         Returns the combined read results.
         """
         # Read the data from the registers
-        high = self.bus.read_byte_data(self.address, register)
-        low = self.bus.read_byte_data(self.address, register + 1)
+        try:
+            high = self.bus.read_byte_data(self.address, register)
+        except OSError:
+            l.error(f'{__class__.__name__}.read_i2c_word(), register = {register}, IO Error, reading first 8 bits')
+            return None
+        try:
+            low = self.bus.read_byte_data(self.address, register + 1)
+        except OSError:
+            l.error(f'{__class__.__name__}.read_i2c_word(), register = {register}, IO Error, reading second 8 bits')
+            return None
 
         value = (high << 8) + low
 
@@ -88,13 +126,14 @@ class mpu6050:
         else:
             return value
 
-    # MPU-6050 Methods
-
     def get_temp(self):
         """Reads the temperature from the onboard temperature sensor of the MPU-6050.
 
         Returns the temperature in degrees Celcius.
         """
+
+        l.info(f'{__class__.__name__}.get_temp()')
+
         raw_temp = self.read_i2c_word(self.TEMP_OUTH)
 
         # Get the actual temperature using the formule given in the
@@ -105,77 +144,52 @@ class mpu6050:
 
     def set_accel_range(self, accel_range):
         """Sets the range of the accelerometer to range.
-
         accel_range -- the range to set the accelerometer to. Using a
         pre-defined range is advised.
         """
+
+        l.info(f'{__class__.__name__}.set_accel_range() - Setting acceleration Range to {accel_range}')
+        if mpu6050.ACCEL_RANGE_MAP.get(accel_range) is None:
+            raise ValueError(f'{accel_range} is not a valid Acceleration Range')
+
         # First change it to 0x00 to make sure we write the correct value later
         self.bus.write_byte_data(self.address, self.ACCEL_CONFIG, 0x00)
 
         # Write the new range to the ACCEL_CONFIG register
-        self.bus.write_byte_data(self.address, self.ACCEL_CONFIG, accel_range)
+        self.bus.write_byte_data(self.address, self.ACCEL_CONFIG, self.ACCEL_RANGE_MAP.get(accel_range))
+        
+        # Store the current acceleration range
+        self.accel_range=accel_range
 
-    def read_accel_range(self, raw = False):
-        """Reads the range the accelerometer is set to.
-
-        If raw is True, it will return the raw value from the ACCEL_CONFIG
-        register
-        If raw is False, it will return an integer: -1, 2, 4, 8 or 16. When it
-        returns -1 something went wrong.
-        """
-        raw_data = self.bus.read_byte_data(self.address, self.ACCEL_CONFIG)
-
-        if raw is True:
-            return raw_data
-        elif raw is False:
-            if raw_data == self.ACCEL_RANGE_2G:
-                return 2
-            elif raw_data == self.ACCEL_RANGE_4G:
-                return 4
-            elif raw_data == self.ACCEL_RANGE_8G:
-                return 8
-            elif raw_data == self.ACCEL_RANGE_16G:
-                return 16
-            else:
-                return -1
-
-    def get_accel_data(self, g = False):
+    def get_accel_data(self):
         """Gets and returns the X, Y and Z values from the accelerometer.
 
         If g is True, it will return the data in g
         If g is False, it will return the data in m/s^2
         Returns a dictionary with the measurement results.
         """
-        x = self.read_i2c_word(self.ACCEL_XOUTH)
-        y = self.read_i2c_word(self.ACCEL_YOUTH)
-        z = self.read_i2c_word(self.ACCEL_ZOUTH)
+        l.info(f'{__class__.__name__}.get_accel_data()')
 
-        accel_scale_modifier = None
-        accel_range = self.read_accel_range(True)
+        xyz=[self.read_i2c_word(reg) for reg in [mpu6050.ACCEL_XOUTH,mpu6050.ACCEL_YOUTH,mpu6050.ACCEL_ZOUTH]]
+            
+        try:
+            xyz=[i/mpu6050.ACCEL_SCALE_MAP.get(self.accel_range)*mpu6050.GRAVITIY_MS2 for i in xyz]
+        except TypeError:
+            l.error(f'{__class__.__name__}.get_accel_data(), error')         
+            xyz=[None,None,None]
 
-        if accel_range == self.ACCEL_RANGE_2G:
-            accel_scale_modifier = self.ACCEL_SCALE_MODIFIER_2G
-        elif accel_range == self.ACCEL_RANGE_4G:
-            accel_scale_modifier = self.ACCEL_SCALE_MODIFIER_4G
-        elif accel_range == self.ACCEL_RANGE_8G:
-            accel_scale_modifier = self.ACCEL_SCALE_MODIFIER_8G
-        elif accel_range == self.ACCEL_RANGE_16G:
-            accel_scale_modifier = self.ACCEL_SCALE_MODIFIER_16G
-        else:
-            print("Unkown range - accel_scale_modifier set to self.ACCEL_SCALE_MODIFIER_2G")
-            accel_scale_modifier = self.ACCEL_SCALE_MODIFIER_2G
+        return {'x': xyz[0], 'y': xyz[1], 'z': xyz[2]}
 
-        x = x / accel_scale_modifier
-        y = y / accel_scale_modifier
-        z = z / accel_scale_modifier
-
-        if g is True:
-            return {'x': x, 'y': y, 'z': z}
-        elif g is False:
-            x = x * self.GRAVITIY_MS2
-            y = y * self.GRAVITIY_MS2
-            z = z * self.GRAVITIY_MS2
-            return {'x': x, 'y': y, 'z': z}
+    def calculate_angle(self,xyz):
+        """
+           Calculates the angles between the acceleration vector components
+        """
+        l.info(f'{__class__.__name__}.calculate_angle()')
+        try:
+            angle=acos(xyz['y']/sqrt(xyz['x']**2 + xyz['y']**2 + xyz['z']**2))*180/pi
+        except (ValueError,TypeError):
+            angle=None
+        return angle 
 
     def set_gyro_range(self, gyro_range):
         """Sets the range of the gyroscope to range.
@@ -183,82 +197,31 @@ class mpu6050:
         gyro_range -- the range to set the gyroscope to. Using a pre-defined
         range is advised.
         """
+        l.info(f'{__class__.__name__}.set_gyro_range() - Setting gyro Range to {gyro_range}')
+        if mpu6050.GYRO_RANGE_MAP.get(gyro_range) is None:
+            raise ValueError(f'{gyro_range} is not a valid Acceleration Range')
+
         # First change it to 0x00 to make sure we write the correct value later
         self.bus.write_byte_data(self.address, self.GYRO_CONFIG, 0x00)
 
         # Write the new range to the ACCEL_CONFIG register
-        self.bus.write_byte_data(self.address, self.GYRO_CONFIG, gyro_range)
+        self.bus.write_byte_data(self.address, self.GYRO_CONFIG, mpu6050.GYRO_RANGE_MAP.get(gyro_range))
 
-    def read_gyro_range(self, raw = False):
-        """Reads the range the gyroscope is set to.
-
-        If raw is True, it will return the raw value from the GYRO_CONFIG
-        register.
-        If raw is False, it will return 250, 500, 1000, 2000 or -1. If the
-        returned value is equal to -1 something went wrong.
-        """
-        raw_data = self.bus.read_byte_data(self.address, self.GYRO_CONFIG)
-
-        if raw is True:
-            return raw_data
-        elif raw is False:
-            if raw_data == self.GYRO_RANGE_250DEG:
-                return 250
-            elif raw_data == self.GYRO_RANGE_500DEG:
-                return 500
-            elif raw_data == self.GYRO_RANGE_1000DEG:
-                return 1000
-            elif raw_data == self.GYRO_RANGE_2000DEG:
-                return 2000
-            else:
-                return -1
+        # Set the current gyro range
+        self.gyro_range=gyro_range
 
     def get_gyro_data(self):
         """Gets and returns the X, Y and Z values from the gyroscope.
 
         Returns the read values in a dictionary.
         """
-        x = self.read_i2c_word(self.GYRO_XOUTH)
-        y = self.read_i2c_word(self.GYRO_YOUTH)
-        z = self.read_i2c_word(self.GYRO_ZOUTH)
+        l.info(f'{__class__.__name__}.get_gyro_data()')
+        xyz=[self.read_i2c_word(reg) for reg in [mpu6050.GYRO_XOUTH,mpu6050.GYRO_YOUTH,mpu6050.GYRO_ZOUTH]]
 
-        gyro_scale_modifier = None
-        gyro_range = self.read_gyro_range(True)
+        try:
+            xyz=[i/mpu6050.GYRO_SCALE_MAP.get(self.gyro_range) for i in xyz]
+        except TypeError:
+            l.error(f'{__class__.__name__}.get_gyro_data(), error')         
+            xyz=[None,None,None]
 
-        if gyro_range == self.GYRO_RANGE_250DEG:
-            gyro_scale_modifier = self.GYRO_SCALE_MODIFIER_250DEG
-        elif gyro_range == self.GYRO_RANGE_500DEG:
-            gyro_scale_modifier = self.GYRO_SCALE_MODIFIER_500DEG
-        elif gyro_range == self.GYRO_RANGE_1000DEG:
-            gyro_scale_modifier = self.GYRO_SCALE_MODIFIER_1000DEG
-        elif gyro_range == self.GYRO_RANGE_2000DEG:
-            gyro_scale_modifier = self.GYRO_SCALE_MODIFIER_2000DEG
-        else:
-            print("Unkown range - gyro_scale_modifier set to self.GYRO_SCALE_MODIFIER_250DEG")
-            gyro_scale_modifier = self.GYRO_SCALE_MODIFIER_250DEG
-
-        x = x / gyro_scale_modifier
-        y = y / gyro_scale_modifier
-        z = z / gyro_scale_modifier
-
-        return {'x': x, 'y': y, 'z': z}
-
-    def get_all_data(self):
-        """Reads and returns all the available data."""
-        temp = self.get_temp()
-        accel = self.get_accel_data()
-        gyro = self.get_gyro_data()
-
-        return [accel, gyro, temp]
-
-if __name__ == "__main__":
-    mpu = mpu6050(0x68)
-    print(mpu.get_temp())
-    accel_data = mpu.get_accel_data()
-    print(accel_data['x'])
-    print(accel_data['y'])
-    print(accel_data['z'])
-    gyro_data = mpu.get_gyro_data()
-    print(gyro_data['x'])
-    print(gyro_data['y'])
-    print(gyro_data['z'])
+        return {'x': xyz[0], 'y': xyz[1], 'z': xyz[2]}
